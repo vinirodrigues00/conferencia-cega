@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "laravel-boost": {
+            "command": "wsl.exe",
+            "args": [
+                "/home/vinicius/.config/herd-lite/bin/php",
+                "/home/vinicius/projetos/conferencia-cega/artisan",
+                "boost:mcp"
+            ]
+        }
+    }
+}
