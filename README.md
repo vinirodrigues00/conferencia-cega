@@ -1,58 +1,133 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Conferência Cega
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Sistema de conferência cega para o **recebimento de mercadorias** em armazéns e centros de distribuição.
 
-## About Laravel
+## O problema
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Quando um caminhão chega ao armazém, alguém precisa conferir se o que foi entregue bate com a **nota fiscal (NF)**: os produtos certos, nas quantidades certas.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+Na conferência tradicional, o conferente tem a nota em mãos e já sabe que deveriam chegar, por exemplo, 48 caixas. Esse número vira uma âncora. Cansado, no fim do turno, ele tende a "enxergar" 48 caixas mesmo quando chegaram 46. É o **viés de confirmação**, e ele faz faltas e sobras passarem despercebidas.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+A **conferência cega** remove a âncora: o conferente sabe **quais produtos** constam na nota, mas **não sabe as quantidades esperadas**. Ele lê o código de barras de cada item com o coletor, e quem compara o contado com o esperado é o sistema. O conferente só consegue informar o que de fato contou.
 
-## Learning Laravel
+## Perfis de acesso
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+O sistema trabalha com **perfis**, não com pessoas. Em empresas grandes cada perfil costuma ser uma pessoa diferente; em empresas pequenas a mesma pessoa pode acumular perfis.
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+| Perfil | O que faz | Vê quantidades esperadas? |
+|---|---|---|
+| **Administrativo** | Cadastra fornecedores, produtos e notas fiscais | Sim |
+| **Conferente** | Lê os códigos de barras e realiza a contagem | **Não** |
+| **Supervisor** | Analisa divergências e decide o desfecho da conferência | Sim |
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+## Códigos de barras: EAN e DUN
 
-## Agentic Development
+Cada produto pode ser lido por dois códigos:
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+- **EAN-13**: identifica a **unidade**. Cada leitura soma 1 unidade.
+- **DUN-14**: identifica a **caixa**. Cada leitura soma o **fator de embalagem** do produto (ex.: caixa com 12 unidades soma 12).
 
-```bash
-composer require laravel/boost --dev
+Por isso o cadastro de produto guarda o EAN, o DUN e o fator de embalagem.
 
-php artisan boost:install
+## Fluxo principal
+
+1. O **Administrativo** cadastra a nota fiscal: fornecedor, número e itens (produto e quantidade).
+2. O **Conferente** abre a conferência da nota. Na tela ele vê a lista de produtos, **sem as quantidades**.
+3. Ele lê o código de barras (EAN ou DUN) de cada item e informa a **data de validade**. Opcionalmente, pode ler um item uma vez e informar um **multiplicador** (ex.: leu 1 caixa e informou ×10).
+4. Ao terminar, ele finaliza a contagem e o sistema compara o contado com a nota:
+   - **Tudo confere**: a conferência é concluída.
+   - **Há divergência**: o sistema informa **quais produtos** divergem, sem revelar as quantidades, e pede uma **recontagem cega** desses produtos.
+5. Se a divergência persistir após a recontagem, a conferência vai para o **Supervisor**.
+6. O **Supervisor** vê o esperado e o contado lado a lado, com o histórico de leituras, e decide:
+   - **Aceitar a divergência**, registrando a falta ou a sobra;
+   - **Mandar recontar**;
+   - **Recusar a nota**.
+
+### Status de uma conferência
+
+```
+Aberta → Em conferência → Concluída
+                ↓
+          Em recontagem → Concluída
+                ↓
+     Aguardando supervisor → Concluída com divergência
+                           → Em recontagem
+                           → Recusada
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+## Regras de negócio
 
-## Contributing
+- O conferente **nunca** vê as quantidades esperadas: nem na contagem, nem na recontagem.
+- Ler um código de barras que **não pertence a nenhum produto da nota** é **bloqueado na hora**, com aviso ao conferente.
+- A leitura de DUN soma o fator de embalagem do produto; a de EAN soma 1.
+- Toda leitura registra a **data de validade** informada pelo conferente.
+- O multiplicador é permitido, mas toda leitura fica registrada em uma **trilha de auditoria**: quem leu, quando, qual código, qual multiplicador e qual validade.
+- No MVP há **uma** recontagem cega antes de a conferência ir para o supervisor.
+- Só o supervisor pode aceitar divergência, mandar recontar ou recusar a nota.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## Fora do escopo (por enquanto)
 
-## Code of Conduct
+- **Conferência de expedição** (saída de mercadoria), que segue um processo diferente.
+- **Importação do XML da NF-e**: no MVP a nota é cadastrada manualmente. A importação de XML é a próxima fase.
+- Integração com ERP.
+- Controle de lote.
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Melhorias futuras
 
-## Security Vulnerabilities
+- **Etiquetas de volume**: ao concluir a conferência, imprimir uma etiqueta para cada volume ou palete conferido, com produto, quantidade e validade.
+- **Ordem de serviço de armazenagem**: vincular cada etiqueta a uma O.S. que indica o endereço de destino no estoque e só é finalizada quando a mercadoria é armazenada.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+## Roadmap
 
-## License
+- [x] **Fase 0**: escopo e regras de negócio (este README)
+- [ ] **Fase 1**: cadastros de fornecedores, produtos (EAN, DUN e fator de embalagem) e notas fiscais
+- [ ] **Fase 2**: perfis de acesso e autorização
+- [ ] **Fase 3**: conferência cega, leituras (com validade) e trilha de auditoria
+- [ ] **Fase 4**: divergências, recontagem e decisão do supervisor
+- [ ] **Fase 5**: importação do XML da NF-e
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## Stack
+
+- PHP 8.5 e Laravel 13
+- PostgreSQL
+- Tailwind CSS 4 e Vite
+- Pest para testes
+- Laravel Sail (Docker) para o ambiente local
+
+## Como rodar
+
+Pré-requisito: Docker.
+
+```bash
+git clone <url-do-repositorio>
+cd conferencia-cega
+cp .env.example .env
+```
+
+No `.env`, configure o banco para o PostgreSQL do Sail:
+
+```env
+DB_CONNECTION=pgsql
+DB_HOST=pgsql
+DB_PORT=5432
+DB_DATABASE=laravel
+DB_USERNAME=sail
+DB_PASSWORD=password
+```
+
+Instale as dependências e suba os containers:
+
+```bash
+docker run --rm -v "$(pwd)":/var/www/html -w /var/www/html laravelsail/php85-composer:latest composer install
+./vendor/bin/sail up -d
+./vendor/bin/sail artisan key:generate
+./vendor/bin/sail artisan migrate
+./vendor/bin/sail npm install
+./vendor/bin/sail npm run dev
+```
+
+Para rodar os testes:
+
+```bash
+./vendor/bin/sail artisan test
+```
